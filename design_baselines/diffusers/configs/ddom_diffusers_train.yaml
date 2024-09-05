@@ -1,0 +1,21 @@
+# ddom_diffusers.yaml
+name: ddom-noconditioning-epch1000
+task: superconductor
+mode: train
+seed: 777
+epochs: 1000
+checkpoint_every_n_epochs: 100
+hidden_size: 1024
+depth: 2
+learning_rate: 1e-3
+auto_tune_lr: true
+# dropout_p: 0 Not implemented
+batch_size: 128
+val_frac: 0.1
+use_gpu: true
+which_gpu: 0
+num_workers: 8
+vtype: gaussian
+normalise_x: true
+normalise_y: true
+condition: 1

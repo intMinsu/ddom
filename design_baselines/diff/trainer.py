@@ -600,7 +600,7 @@ def run_evaluate(
 
     @torch.no_grad()
     def _get_trained_model():
-        checkpoint_path = f"experiments/{taskname}/forward_model/123/wandb/latest-run/files/checkpoints/last.ckpt"
+        checkpoint_path = f"experiments/{taskname}/fwd-1024/{args.seed}/wandb/latest-run/files/checkpoints/last.ckpt"
         model = ForwardModel.load_from_checkpoint(
             checkpoint_path=checkpoint_path,
             taskname=taskname,
@@ -788,14 +788,6 @@ if __name__ == "__main__":
         default=False,
     )
 
-    # i/o
-    parser.add_argument('--dataset',
-                        type=str,
-                        choices=['mnist', 'cifar'],
-                        default='mnist')
-    parser.add_argument('--dataroot', type=str, default='~/.datasets')
-    parser.add_argument('--saveroot', type=str, default='~/.saved')
-    parser.add_argument('--expname', type=str, default='default')
     parser.add_argument('--num_steps',
                         type=int,
                         default=1000,

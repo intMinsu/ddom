@@ -23,6 +23,7 @@ TASKNAME2TASK = {
     'nas': 'CIFARNAS-Exact-v0',
     'chembl': 'ChEMBL_MCHC_CHEMBL3885882_MorganFingerprint-RandomForest-v0',
     # 'gfp': 'GFP-Transformer-v0',
+    'sait-ddom': 'Sait-RandomForest-v0'
 }
 
 

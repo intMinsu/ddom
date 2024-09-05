@@ -172,7 +172,8 @@ class ScoreSdeVeScheduler(SchedulerMixin, ConfigMixin):
 
         return {"prev_sample": prev_sample}
 
-    def add_noise(self, clean_input, t_)
+    def add_noise(self, clean_input, t_):
+        pass
 
     def __len__(self):
         return self.config.num_train_timesteps

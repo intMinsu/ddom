@@ -112,14 +112,16 @@ class DiffusersTest(pl.LightningModule):
 
     def configure_optimizers(self):
         """Configures the optimizer used by PyTorch Lightning."""
+        global train_length
         optimizer = torch.optim.Adam(params=self.model.parameters(),
                                      lr=self.learning_rate)
         lr_scheduler = get_cosine_schedule_with_warmup(
             optimizer=optimizer,
             # TODO: add to config
             num_warmup_steps=500,
-            # num_training_steps=(len(train_dataloader) * config.num_epochs),
-            num_training_steps=(10004 * 1000),
+            #num_training_steps=(len(train_dataloader) * args.configs.num_epochs),
+            #num_training_steps=(10004 * 1000),
+            num_training_steps = train_length * args.configs.num_epochs
         )
         scheduler = {"scheduler": lr_scheduler, "interval": "epoch"}
         return [optimizer], [scheduler]
@@ -185,6 +187,8 @@ class RvSDataset(Dataset):
         return x, y
         # return x, y, w
 
+train_length = 0
+val_length = 0
 
 def split_dataset(task, val_frac=None, device=None):
     length = task.y.shape[0]
@@ -202,9 +206,13 @@ def split_dataset(task, val_frac=None, device=None):
 
     if val_frac is None:
         val_frac = 0
+    
+    global val_length
+    global train_length
 
     val_length = int(length * val_frac)
     train_length = length - val_length
+    print(f"train_length : {train_length}, val_length : {val_length}")
 
     # train_dataset = RvSDataset(task, x[:train_length], y[:train_length], w[:train_length], device, mode='train')
     # val_dataset = RvSDataset(task, x[train_length:], y[train_length:], w[train_length:], device, mode='val')
@@ -298,10 +306,10 @@ def run_training(
     batch_size: int,
     val_frac: float,
     use_gpu: bool,
+    num_training_steps, # Why 1?
     device=None,
     num_workers=1,
     vtype='rademacher',
-    num_training_steps=1,
     normalise_x=False,
     normalise_y=False,
 ):
@@ -400,6 +408,7 @@ def run_evaluate(
         dropout_p=args.dropout_p)
 
     pipeline = DDPMPipeline(unet=model.model, scheduler=model.noise_scheduler)
+    #pipeline = pipeline.to("cuda")
     bs = 256
     y = torch.ones((bs, 1)).to(device) * args.condition
     ops = pipeline(y=y, batch_size=bs, generator=torch.manual_seed(seed))
@@ -443,6 +452,7 @@ def run_evaluate(
 
     with open(os.path.join(save_results_dir, 'results.pkl'), 'wb') as f:
         pkl.dump(yop, f)
+
 
 
 if __name__ == "__main__":
@@ -529,7 +539,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use_gpu",
         action="store_true",
-        default=False,
+        #default=False,
         help="place networks and data on the GPU",
     )
     parser.add_argument("--which_gpu",
@@ -539,12 +549,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--normalise_x",
         action="store_true",
-        default=False,
+        #default=False,
     )
     parser.add_argument(
         "--normalise_y",
         action="store_true",
-        default=False,
+        #default=False,
     )
 
     # i/o
@@ -558,13 +568,15 @@ if __name__ == "__main__":
     parser.add_argument('--num_steps',
                         type=int,
                         default=1000,
-                        help='number of integration steps for sampling')
+                        help='number of integration steps for sampling') 
+    # num_steps is used in diff/trainer.py
 
     # optimization
     parser.add_argument('--num_training_steps',
                         type=int,
                         default=1000,
-                        help='integration time')
+                        required=True,
+                        help='integration time in DDPMScheduler')
     parser.add_argument(
         '--vtype',
         type=str,
@@ -604,7 +616,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--auto_tune_lr",
         action="store_true",
-        default=False,
+        #default=False,
         help=
         "have PyTorch Lightning try to automatically find the best learning rate",
     )
