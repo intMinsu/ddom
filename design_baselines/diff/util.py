@@ -23,7 +23,7 @@ TASKNAME2TASK = {
     'nas': 'CIFARNAS-Exact-v0',
     'chembl': 'ChEMBL_MCHC_CHEMBL3885882_MorganFingerprint-RandomForest-v0',
     # 'gfp': 'GFP-Transformer-v0',
-    'sait-ddom': 'Sait-RandomForest-v0'
+    'sait-ddom': 'SaitDdom-RandomForest-v0'
 }
 
 
@@ -147,6 +147,7 @@ def get_weights(scores, base_temp=None, temp=None):
 
     provable_dist = softmin_prob * (hist / (hist + 1e-3))
     provable_dist = provable_dist / (np.sum(provable_dist) + 1e-7)
+    print(f"base_temp : {base_temp}, temp : {temp}")
     print(provable_dist)
 
     bin_indices = np.digitize(scores_np, bin_edges[1:])

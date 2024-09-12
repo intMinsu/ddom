@@ -4,6 +4,7 @@ import random
 import string
 import uuid
 import shutil
+import csv
 
 from typing import Optional, Union
 from pprint import pprint
@@ -36,6 +37,7 @@ with suppress_output():
     from design_bench.datasets.continuous.ant_morphology_dataset import AntMorphologyDataset
     from design_bench.datasets.continuous.dkitty_morphology_dataset import DKittyMorphologyDataset
     from design_bench.datasets.continuous.superconductor_dataset import SuperconductorDataset
+    from design_bench.datasets.continuous.sait_ddom_dataset import SaitDdomDataset
     # from design_bench.datasets.continuous.hopper_controller_dataset import HopperControllerDataset
 
 import numpy as np
@@ -87,19 +89,19 @@ class RvSDataset(Dataset):
         else:
             return x, y, w
 
+# It is not used
+# def temp_get_super_y(task):
+#     y = task.y.reshape(-1)
+#     sorted_y_idx = np.argsort(y)
 
-def temp_get_super_y(task):
-    y = task.y.reshape(-1)
-    sorted_y_idx = np.argsort(y)
+#     super_task = design_bench.make(TASKNAME2TASK["superconductor"])
+#     super_task.map_normalize_y()
 
-    super_task = design_bench.make(TASKNAME2TASK["superconductor"])
-    super_task.map_normalize_y()
+#     super_y = super_task.y.reshape(-1)
+#     super_y = np.sort(super_y)
+#     super_y = super_y[sorted_y_idx]
 
-    super_y = super_task.y.reshape(-1)
-    super_y = np.sort(super_y)
-    super_y = super_y[sorted_y_idx]
-
-    return super_y
+#     return super_y
 
 
 def split_dataset(task, val_frac=None, device=None, temp=None):
@@ -129,14 +131,16 @@ def split_dataset(task, val_frac=None, device=None, temp=None):
     # full_ds = DKittyMorphologyDataset()
     # y = (y - full_ds.y.min()) / (full_ds.y.max() - full_ds.y.min())
 
-    print(w)
-    print(w.shape)
-
     if val_frac is None:
         val_frac = 0
 
     val_length = int(length * val_frac)
     train_length = length - val_length
+    
+    print(f"Train length : {train_length}")
+    # print(f"Val length : {val_length}")
+    # print(f"Reweighting term : {w}")
+    # print(f"Weight shape : {w.shape}")
 
     train_dataset = RvSDataset(
         task,
@@ -179,13 +183,15 @@ class RvSDataModule(pl.LightningDataModule):
     def train_dataloader(self):
         train_loader = DataLoader(self.train_dataset,
                                   num_workers=self.num_workers,
-                                  batch_size=self.batch_size)
+                                  batch_size=self.batch_size,
+                                  pin_memory=True)
         return train_loader
 
     def val_dataloader(self):
         val_loader = DataLoader(self.val_dataset,
                                 num_workers=self.num_workers,
-                                batch_size=self.batch_size)
+                                batch_size=self.batch_size,
+                                pin_memory=True)
         return val_loader
 
 
@@ -206,9 +212,9 @@ def log_args(
     args_file = os.path.join(out_directory, args_filename)
     with open(args_file, "w") as f:
         try:
-            json.dump(args.__dict__, f)
+            json.dump(args.__dict__, f, indent=4)
         except AttributeError:
-            json.dump(args, f)
+            json.dump(args, f, indent=4)
 
 def run_training_forward(
     taskname: str,
@@ -528,7 +534,7 @@ def run_evaluate(
                     x_t = x_t + (sigma2 -
                                  sigma) / 2 * delta**0.5 * torch.randn_like(x_t)
 
-                if keep_all_samples or i == num_steps - 1:
+                if keep_all_samples or i in range(num_steps - 1, num_steps):
                     xs.append(x_t.cpu())
                 else:
                     pass
@@ -600,7 +606,7 @@ def run_evaluate(
 
     @torch.no_grad()
     def _get_trained_model():
-        checkpoint_path = f"experiments/{taskname}/fwd-1024/{args.seed}/wandb/latest-run/files/checkpoints/last.ckpt"
+        checkpoint_path = f"experiments/{taskname}/fwd-sait-config00/{args.seed}/wandb/latest-run/files/checkpoints/last.ckpt"
         model = ForwardModel.load_from_checkpoint(
             checkpoint_path=checkpoint_path,
             taskname=taskname,
@@ -609,7 +615,6 @@ def run_evaluate(
         return model
 
     # sample and plot
-    designs = []
     results = []
     for lmbd in lmbds:
         if not task.is_discrete:
@@ -631,53 +636,173 @@ def run_evaluate(
                           # keep_all_samples=True)  # sample
 
         ctr = 0
-        pred_model = _get_trained_model()
-        preds = []
-        for qqq in xs:
+        if args.eval_with_forward:
+            forward_pred_model = _get_trained_model()
+        
+        # NaN to Zeros
+        nan_idx_list = []
+        for i, _ in enumerate(xs):
+           # The sample from {num_steps - 1 + i} step
+            for idx, row in enumerate(xs[i]):
+                    if row.isnan().any():
+                        nan_idx_list.append(idx)
+                        print(f"In {num_steps - 100 + i} step, {idx}-row contains nan value. Whole value will be changed to zeros.")
+                        xs[i][idx] = torch.zeros_like(row)
+            #print(f"Replaced row : {nan_idx_list}")
+        
+        
+        # for local-save
+        ddom_yss_normalized = []
+        ddom_yss_denormalized = []
+        if args.eval_with_forward:
+            forward_yss_normalized = []
+            forward_yss_denormalized = []
+        designs = []
+        best_y = []
+        
+        if args.eval_with_forward:
+            result_dict_template = {'ddom_ys_normalized': None,
+                                    'ddom_ys_denormalized': None,
+                                    'forward_ys_normalized': None,
+                                    'forward_ys_denormalized': None,
+                                    'designs': None,
+                                    'best_y': None}
+        else:
+            result_dict_template = {'ddom_ys_normalized': None,
+                                    'ddom_ys_denormalized': None,
+                                    'designs': None,
+                                    'best_y': None}
+        
+        results_dict = {i: None for i in range(num_steps - 1, num_steps)}
+        
+                         
+        for i, qqq in enumerate(xs):
             ctr += 1
-            print(qqq.shape)
+            # {num_steps - 1 + i} step
+            # print(f"xs size : {qqq.shape} ([num_samples, x.shape[0]]) ")
             if not qqq.isnan().any():
                 designs.append(qqq.cpu().numpy())
 
                 if not task.is_discrete:
-                    ys = task.predict(qqq.cpu().numpy())
+                    ddom_ys = task.predict(qqq.cpu().numpy())
                 else:
                     qqq = qqq.view(qqq.size(0), -1, task.x.shape[-1])
-                    ys = task.predict(qqq.cpu().numpy())
-                    print(ys)
-
-                pred_ys = pred_model.mlp(qqq)
-                preds.append(pred_ys.cpu().numpy())
-
-                print("GT ys: {}".format(ys.max()))
-                print("Pred ys: {}".format(pred_ys.max()))
+                    ddom_ys = task.predict(qqq.cpu().numpy())
+                    
+                if args.eval_with_forward:
+                    forward_ys = forward_pred_model.mlp(qqq)           
+                    forward_yss_normalized.append(forward_ys.cpu().numpy())
+                    
+                ddom_yss_normalized.append(ddom_ys)
+                
+                if normalise_x:
+                    pass
+                    #print("normalise_x = true")
                 if normalise_y:
-                    print("normalise")
-                    ys = task.denormalize_y(ys)
-                    print(ys.max())
+                    pass
+                    #print("normalise_y = true")
+
+                #print("DDOM prediction ys(Normalized) : {}".format(ys.max()))
+                #print("Forward-only prediction ys(Normalized): {}".format(forward_only_pred_ys.max()))
+                
+                if normalise_y:
+                    ddom_ys_denormalized = task.denormalize_y(ddom_ys)
+                    #print(f"DDOM prediction ys(Denormalized) : {ys.max()}")
+                    ddom_yss_denormalized.append(ddom_ys_denormalized)
                 else:
-                    print("none")
-                    print(ys.max())
-                results.append(ys)
+                    pass
+                
+                best_y.append(ddom_ys_denormalized.max())
             else:
-                print("fuck")
+                print("xs ([num_samples, x.shape[0]]) contain nan-assigned row.")
+                for idx, row in enumerate(qqq):
+                    if row.isnan().any():
+                        print(f"{idx}-row contains nan value.")
+                        print(row)
+                        
+            result_dict = result_dict_template.copy()
+            
+            if args.eval_with_forward:
+                result_dict = {'ddom_ys_normalized': ddom_yss_normalized,
+                               'ddom_ys_denormalized': ddom_yss_denormalized,
+                               'forward_ys_normalized': forward_yss_normalized,
+                               'forward_ys_denormalized': forward_yss_denormalized,
+                               'designs': designs,
+                               'best_y': best_y}
+            else:
+                result_dict = {'ddom_ys_normalized': ddom_yss_normalized,
+                               'ddom_ys_denormalized': ddom_yss_denormalized,
+                               'designs': designs,
+                               'best_y': best_y}
+                
+            if args.submission:
+                
+                test_preds = []
+                
+                test_df = pd.read_csv(args.data_dir + '/' + 'test_2.csv', index_col=0)
+                test_tensor = torch.tensor(test_df.to_numpy())
+                 
+                # TODO : It just uses wrong oracle. 
+                for i, row in enumerate(test_tensor):
+                    if not row.isnan().any():
 
-    designs = np.concatenate(designs, axis=0)
-    results = np.concatenate(results, axis=0)
-    preds = np.concatenate(preds, axis=0)
+                        if not task.is_discrete:
+                            ddom_test_ys = task.predict(row.cpu().numpy())
+                        else:
+                            row = row.view(row.size(0), -1, task.x.shape[-1])
+                            ddom_test_ys = task.predict(row.cpu().numpy())
+                
+                    if normalise_y:
+                        ddom_test_ys_denormalized = task.denormalize_y(ddom_test_ys)
+                        test_preds.append(ddom_test_ys_denormalized)
+                    else:
+                        test_preds.append(ddom_test_ys)
+                        
+                test_preds = np.array(test_preds)
+                
+                # submission               
+                sample_df = pd.read_csv(args.data_dir + '/' + 'sample_submission_2.csv')
+                sample_df['y'] = test_preds.reshape(-1)
+                sample_df.to_csv(save_results_dir + '/' + 'submission.csv', index=False)
+                print(f"Updated submission saved to submission.csv on {save_results_dir}.")
+            else:
+                print("No submisison")
+                
+            
+            results_dict[num_steps - 1 + i] = result_dict
+    
+    # Convert list of dictionaries to a Pandas DataFrame
+    df = pd.DataFrame(results_dict)
 
-    print(designs.shape)
-    print(results.shape)
-    print(preds.shape)
+    # Save the DataFrame to a CSV file
+    df.to_json(save_results_dir + '/' + 'output.json', orient='index', indent=2)
+    
+    # Load the JSON data from the file
+    with open(save_results_dir + '/' + 'output.json') as f:
+        data = json.load(f)
 
-    with open(os.path.join(save_results_dir, 'designs.pkl'), 'wb') as f:
-        pkl.dump(designs, f)
+    # Extract the relevant data from the JSON structure
+    designs = data['designs']['999'][0]
+    
+    # TODO: does not need to open json but use designs array right away
+    # Open a CSV file to write the data
+    with open(save_results_dir + '/' + 'designs.csv', mode='w', newline='') as file:
+        writer = csv.writer(file)
+        
+        # Write the header
+        header = ['ID'] + [f'x_{i}' for i in range(11)]
+        writer.writerow(header)
+        
+        # Write the rows of data
+        for idx, row in enumerate(designs):
+            writer.writerow([f'TEST_{idx:04d}'] + row)
 
-    with open(os.path.join(save_results_dir, 'results.pkl'), 'wb') as f:
-        pkl.dump(results, f)
 
-    with open(os.path.join(save_results_dir, 'preds.pkl'), 'wb') as f:
-        pkl.dump(preds, f)
+
+
+    
+
+    print(f"All results saved to output.json on {save_results_dir}")
 
     shutil.copy(args.configs, save_results_dir)
 
@@ -787,6 +912,26 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
     )
+    
+    parser.add_argument(
+        "--train_only_forward",
+        action="store_true",
+        default=False,
+    )
+    
+    parser.add_argument(
+        "--eval_with_forward",
+        action="store_true",
+        default=False,
+    )
+    
+    parser.add_argument(
+        "--submission",
+        action="store_true",
+        default=False,
+    )
+    parser.add_argument("--data_dir", default='data', type=str)
+
 
     parser.add_argument('--num_steps',
                         type=int,
@@ -888,14 +1033,20 @@ if __name__ == "__main__":
             name=f"{args.name}_task={args.task}_{args.seed}",
             save_dir=expt_save_path)
         log_args(args, wandb_logger)
-        run_training(
-        # run_training_forward(
-            taskname=args.task,
-            seed=args.seed,
-            wandb_logger=wandb_logger,
-            args=args,
-            device=device,
-        )
+        
+        if args.train_only_forward:
+            run_training_forward(taskname=args.task,
+                                 seed=args.seed,
+                                 wandb_logger=wandb_logger,
+                                 args=args,
+                                 device=device)
+        else:
+            run_training(taskname=args.task,
+                         seed=args.seed,
+                         wandb_logger=wandb_logger,
+                         args=args,
+                         device=device)
+            
     elif args.mode == 'eval':
         checkpoint_path = os.path.join(
             expt_save_path, "wandb/latest-run/files/checkpoints/last.ckpt")
